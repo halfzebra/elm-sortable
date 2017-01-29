@@ -80,14 +80,23 @@ update msg model =
                                     model
                                         |> .items
                                         |> List.indexedMap (,)
-                                        |> List.sortWith
-                                            (\( a, _ ) ( b, _ ) ->
-                                                if from == to then
-                                                    EQ
+                                        |> List.foldl
+                                            (\( index, value ) acc ->
+                                                if index == to then
+                                                    --  If dragging element is below, then prepend in after
+                                                    if from < to then
+                                                        fromVal :: value :: acc
+                                                    else if from > to then
+                                                        value :: fromVal :: acc
+                                                    else
+                                                        fromVal :: acc
+                                                else if index == from then
+                                                    acc
                                                 else
-                                                    LT
+                                                    value :: acc
                                             )
-                                        |> List.map (\( _, v ) -> v)
+                                            []
+                                        |> List.reverse
 
                                 Nothing ->
                                     model.items
@@ -164,30 +173,10 @@ view model =
                 |> List.map (\t -> span [] [ text t ])
                 |> List.indexedMap
                     (\index item ->
-                        ( index
-                        , li
+                        li
                             [ on "mousedown" (Json.Decode.map (DragStart index) decoder) ]
                             [ item ]
-                        )
                     )
-                |> List.foldl
-                    (\( index, item ) acc ->
-                        Maybe.map2
-                            (\from to ->
-                                if to == index then
-                                    if from < to then
-                                        (li [] [ text "placeholder" ]) :: item :: acc
-                                    else
-                                        item :: (li [] [ text "placeholder" ]) :: acc
-                                else
-                                    item :: acc
-                            )
-                            model.draggingIndex
-                            model.draggingOver
-                            |> Maybe.withDefault (item :: acc)
-                    )
-                    []
-                |> List.reverse
             )
         ]
 
