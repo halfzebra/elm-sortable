@@ -2,12 +2,10 @@ module App exposing (..)
 
 import Html exposing (Html, text, div, ul, li, span)
 import Html.Attributes exposing (style)
-import Html.Events exposing (on)
+import Html.Events exposing (on, onMouseEnter, onMouseLeave)
 import Json.Decode exposing (Decoder)
-import List.Extra
 import Mouse exposing (Position)
-import DOM exposing (Rectangle)
-import PageVisibility exposing (Visibility(..))
+import DOM
 
 
 init =
@@ -19,11 +17,7 @@ init =
             , "Item 5"
             , "Item 6"
             ]
-      , mouse = Nothing
-      , dragging = False
-      , draggingIndex = Nothing
-      , dragTarget = Nothing
-      , itemOffsets = []
+      , dragging = Nothing
       , draggingOver = Nothing
       }
     , Cmd.none
@@ -31,162 +25,61 @@ init =
 
 
 type Msg
-    = DragStart Int DragTarget
-    | DragStop Position
-    | VisibilityChange Visibility
-    | Move Position
+    = DragStart Int Float
+    | DragStop
+    | DragOver Int
+    | ContainerLeave
 
 
 update msg model =
     case msg of
-        DragStart index dragTarget ->
-            let
-                -- Calculate the boundaries on y axis
-                itemOffsets =
-                    dragTarget.itemsSizes
-                        |> List.map .height
-                        |> List.scanl (+) 0
-                        |> List.filter ((/=) 0)
-            in
-                ( { model
-                    | dragging = True
-                    , draggingIndex = Just index
-                    , dragTarget = Just dragTarget
-                    , itemOffsets = itemOffsets
-                  }
-                , Cmd.none
-                )
+        DragStart index height ->
+            ( { model | dragging = Just ( index, height ) }, Cmd.none )
 
-        DragStop position ->
-            let
-                disableDragging =
-                    { model
-                        | dragging = False
-                        , draggingIndex = Nothing
-                        , mouse = Nothing
-                        , dragTarget = Nothing
-                        , draggingOver = Nothing
-                        , itemOffsets = []
-                    }
-            in
-                ( Maybe.map2
-                    (\from to ->
-                        let
-                            fromValMaybe =
-                                List.Extra.getAt from model.items
-                        in
-                            case fromValMaybe of
-                                Just fromVal ->
-                                    model
-                                        |> .items
-                                        |> List.indexedMap (,)
-                                        |> List.foldl
-                                            (\( index, value ) acc ->
-                                                if index == to then
-                                                    --  If dragging element is below, then prepend in after
-                                                    if from < to then
-                                                        fromVal :: value :: acc
-                                                    else if from > to then
-                                                        value :: fromVal :: acc
-                                                    else
-                                                        fromVal :: acc
-                                                else if index == from then
-                                                    acc
-                                                else
-                                                    value :: acc
-                                            )
-                                            []
-                                        |> List.reverse
+        DragOver index ->
+            ( { model | draggingOver = Just index }, Cmd.none )
 
-                                Nothing ->
-                                    model.items
-                    )
-                    model.draggingIndex
-                    model.draggingOver
-                    |> Maybe.map (\items -> { disableDragging | items = items })
-                    |> Maybe.withDefault disableDragging
-                , Cmd.none
-                )
+        DragStop ->
+            ( { model | dragging = Nothing }, Cmd.none )
 
-        Move position ->
-            model
-                |> .dragTarget
-                |> Maybe.map (\{ parentBoundingClientRect } -> List.map (\v -> v + parentBoundingClientRect.top) model.itemOffsets)
-                |> Maybe.map (List.indexedMap (,))
-                |> Maybe.map (List.Extra.find (\( index, offset ) -> position.y < truncate offset))
-                |> Maybe.andThen (Maybe.map (\( index, _ ) -> { model | mouse = Just position, draggingOver = Just index }))
-                |> Maybe.withDefault model
-                |> \m -> ( m, Cmd.none )
-
-        VisibilityChange visibility ->
-            case visibility of
-                Hidden ->
-                    ( { model
-                        | dragging = False
-                        , draggingIndex = Nothing
-                        , mouse = Nothing
-                      }
-                    , Cmd.none
-                    )
-
-                _ ->
-                    ( model, Cmd.none )
+        ContainerLeave ->
+            ( { model | draggingOver = Nothing }, Cmd.none )
 
 
-type alias Size =
-    { width : Float
-    , height : Float
-    }
-
-
-type alias DragTarget =
-    { parentBoundingClientRect : Rectangle
-    , itemsSizes : List Size
-    }
-
-
-decoder : Decoder DragTarget
 decoder =
-    DOM.target
-        (Json.Decode.map2
-            DragTarget
-            (DOM.parentElement (DOM.parentElement DOM.boundingClientRect))
-            (DOM.parentElement
-                (DOM.parentElement
-                    (DOM.childNodes
-                        (Json.Decode.map2
-                            Size
-                            DOM.offsetWidth
-                            DOM.offsetHeight
-                        )
-                    )
-                )
-            )
-        )
+    DOM.target DOM.offsetHeight
 
 
 view model =
     div []
         [ ul
-            [ style [ ( "user-select", "none" ) ] ]
-            (model.items
-                |> List.map (\t -> span [] [ text t ])
-                |> List.indexedMap
-                    (\index item ->
-                        li
-                            [ on "mousedown" (Json.Decode.map (DragStart index) decoder) ]
-                            [ item ]
-                    )
+            [ style [ ( "user-select", "none" ) ]
+            , onMouseLeave ContainerLeave
+            ]
+            (List.indexedMap
+                (\index item ->
+                    li
+                        (model.dragging
+                            |> Maybe.map
+                                (\( draggingIndex, height ) ->
+                                    if index == draggingIndex then
+                                        [ style [ ( "visibility", "hidden" ) ] ]
+                                    else
+                                        [ onMouseEnter (DragOver index) ]
+                                )
+                            |> Maybe.withDefault [ on "mousedown" (Json.Decode.map (DragStart index) decoder) ]
+                        )
+                        [ text item ]
+                )
+                model.items
             )
         ]
 
 
 subscriptions model =
-    if model.dragging == True then
-        Sub.batch
-            [ Mouse.moves Move
-            , Mouse.ups DragStop
-            , PageVisibility.visibilityChanges VisibilityChange
-            ]
-    else
-        Sub.none
+    case model.dragging of
+        Just index ->
+            Mouse.ups (always DragStop)
+
+        Nothing ->
+            Sub.none
